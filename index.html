@@ -1,246 +1,193 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-<title>星空粒子（Safari 直接打开）</title>
+<title>Interactive 3D Particle System</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  html,body{height:100%;margin:0;background:#071024;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;color:#fff;overflow:hidden}
-  #app{width:100%;height:100vh;position:relative;display:block}
-  canvas{display:block;width:100%;height:100%}
-  .ui{position:absolute;left:10px;top:10px;display:flex;gap:8px;align-items:center;background:rgba(255,255,255,0.04);padding:8px;border-radius:10px;backdrop-filter:blur(6px)}
-  .ui select,.ui input[type=color],.ui button{height:36px;border-radius:8px;border:0;padding:6px 8px;background:rgba(255,255,255,0.04);color:#fff}
-  #fullscreen{position:absolute;right:12px;top:12px;height:40px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.04);border:0;color:#fff}
-  #hint{position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,0.28);padding:8px;border-radius:8px;font-size:13px}
-  #cameraToggle{height:36px;border-radius:8px;border:0;padding:6px 8px;background:rgba(255,255,255,0.04);color:#fff;margin-left:6px}
+    body {
+        margin:0; overflow:hidden;
+        background:black; 
+        font-family:Arial, sans-serif;
+    }
+    #ui {
+        position:fixed;
+        top:20px; right:20px;
+        background:rgba(255,255,255,0.12);
+        backdrop-filter: blur(10px);
+        padding:12px;
+        border-radius:10px;
+        display:flex;
+        flex-direction:column;
+        gap:10px;
+    }
+    select, input, button {
+        padding:8px;
+        border:none;
+        border-radius:6px;
+        font-size:14px;
+    }
+    button {
+        cursor:pointer;
+        background:#222;
+        color:white;
+    }
 </style>
 </head>
 <body>
-  <div id="app"></div>
-  <div class="ui">
-    <select id="modelSelect" title="模型选择">
-      <option value="none">纯粒子</option>
-      <option value="moon">月球 🌕</option>
-      <option value="saturn">土星 🪐</option>
-      <option value="heart">爱心 💗</option>
-      <option value="fireworks">烟花 🎆</option>
+
+<div id="ui">
+    <select id="shapeSelect">
+        <option value="Heart3D">Heart</option>
+        <option value="Flower">Flower</option>
+        <option value="Star">Star</option>
+        <option value="Snowflake">Snowflake</option>
+        <option value="OrbitRing">Solar Orbit</option>
     </select>
-    <input type="color" id="colorPicker" value="#ffd166" title="粒子颜色" />
-    <button id="resetBtn">重置</button>
-    <button id="cameraToggle">手势: 关</button>
-  </div>
-  <button id="fullscreen">全屏 ⤢</button>
-  <div id="hint">点触缩放 / 双指捏合 / 开启摄像头手势（允许摄像头权限）</div>
 
-  <!-- Three.js (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/examples/js/controls/OrbitControls.js"></script>
-  <!-- MediaPipe Hands (可选，用于手势) -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <input type="color" id="colorPicker" value="#ff3388">
+    <button id="gestureToggle">Gesture: OFF</button>
+</div>
 
-  <script>
-  // Mobile-first single-file particle scene for Safari
-  const app = document.getElementById('app');
-  const canvas = document.createElement('canvas');
-  app.appendChild(canvas);
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r155/three.min.js"></script>
 
-  const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.setSize(window.innerWidth, window.innerHeight);
+<script>
+let scene, camera, renderer, particles;
+let attract = true;
+let color = "#ff3388";
+let shape = "Heart3D";
 
-  const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x071024, 0.002);
+init();
+animate();
 
-  const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
-  camera.position.set(0,0,70);
+function init(){
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
 
-  const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enablePan = false;
-  controls.enableRotate = true;
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.minDistance = 12;
-  controls.maxDistance = 300;
+    camera = new THREE.PerspectiveCamera(
+        65, window.innerWidth/window.innerHeight,0.1,1000);
+    camera.position.set(0,0,35);
 
-  scene.add(new THREE.AmbientLight(0x8888aa, 0.6));
-  const light = new THREE.DirectionalLight(0xffffff, 0.6);
-  light.position.set(5,10,7); scene.add(light);
+    renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-  // texture for particle (canvas)
-  function makeTex(size=128){
-    const c = document.createElement('canvas'); c.width = c.height = size;
-    const ctx = c.getContext('2d');
-    const g = ctx.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);
-    g.addColorStop(0,'rgba(255,255,255,1)');
-    g.addColorStop(0.2,'rgba(255,255,255,0.9)');
-    g.addColorStop(0.45,'rgba(255,255,255,0.18)');
-    g.addColorStop(1,'rgba(255,255,255,0)');
-    ctx.fillStyle = g; ctx.fillRect(0,0,size,size);
-    for(let i=0;i<10;i++){ ctx.beginPath(); ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.arc(Math.random()*size,Math.random()*size,Math.random()*2+0.5,0,Math.PI*2); ctx.fill(); }
-    return new THREE.CanvasTexture(c);
-  }
-  const sparkle = makeTex(128);
+    createParticles(shape);
 
-  let particleSystem, particleMat, particleGeo;
-  let particleCount = 9000;
-
-  function createParticles(){
-    if(particleSystem){ scene.remove(particleSystem); particleGeo.dispose(); particleMat.dispose(); }
-    particleGeo = new THREE.BufferGeometry();
-    const pos = new Float32Array(particleCount*3);
-    const size = new Float32Array(particleCount);
-    for(let i=0;i<particleCount;i++){
-      pos[i*3] = THREE.MathUtils.randFloatSpread(180);
-      pos[i*3+1] = THREE.MathUtils.randFloatSpread(100);
-      pos[i*3+2] = THREE.MathUtils.randFloatSpread(180);
-      size[i] = Math.random()*2.6 + 0.6;
-    }
-    particleGeo.setAttribute('position', new THREE.BufferAttribute(pos,3));
-    particleGeo.setAttribute('aSize', new THREE.BufferAttribute(size,1));
-
-    particleMat = new THREE.ShaderMaterial({
-      transparent:true,
-      depthWrite:false,
-      blending:THREE.AdditiveBlending,
-      uniforms:{
-        uTime:{value:0},
-        uColor:{value:new THREE.Color(document.getElementById('colorPicker').value)},
-        uTex:{value:sparkle}
-      },
-      vertexShader: `
-        attribute float aSize;
-        varying float v;
-        uniform float uTime;
-        void main(){
-          v = 0.6 + 0.4*sin(uTime*2.0 + position.x*0.01 + position.y*0.02);
-          vec3 p = position + normalize(position) * 0.5 * v;
-          vec4 mv = modelViewMatrix * vec4(p,1.0);
-          gl_PointSize = aSize * (150.0 / -mv.z) * (0.7 + 0.6*v);
-          gl_Position = projectionMatrix * mv;
-        }`,
-      fragmentShader: `
-        uniform vec3 uColor;
-        uniform sampler2D uTex;
-        varying float v;
-        void main(){
-          vec4 t = texture2D(uTex, gl_PointCoord);
-          float a = t.a * (0.6 + 0.4*v);
-          gl_FragColor = vec4(uColor * t.rgb * (0.7 + v*0.6), a);
-        }`
+    document.getElementById("shapeSelect").addEventListener("change", e=>{
+        shape = e.target.value;
+        createParticles(shape);
     });
 
-    particleSystem = new THREE.Points(particleGeo, particleMat);
-    scene.add(particleSystem);
-  }
-  createParticles();
+    document.getElementById("colorPicker").addEventListener("input", e=>{
+        color = e.target.value;
+        particles.material.color.set(color);
+    });
 
-  // models group
-  const group = new THREE.Group(); scene.add(group);
+    document.getElementById("gestureToggle").addEventListener("click", e=>{
+        attract = !attract;
+        e.target.textContent = attract ? "Gesture: ON" : "Gesture: OFF";
+    });
 
-  function addMoon(){ const geo=new THREE.SphereGeometry(8,48,48); const mat=new THREE.MeshStandardMaterial({color:0xdddddd, roughness:0.9}); const m=new THREE.Mesh(geo,mat); m.position.set(-18,8,-18); group.add(m); }
-  function addSaturn(){ const body=new THREE.Mesh(new THREE.SphereGeometry(6,40,40),new THREE.MeshStandardMaterial({color:0xffe6c0})); body.position.set(18,6,-12); const ring=new THREE.Mesh(new THREE.RingGeometry(8.5,13,64), new THREE.MeshStandardMaterial({color:0xbfa87f, side:THREE.DoubleSide})); ring.rotation.x=Math.PI/2.2; ring.position.copy(body.position); group.add(body); group.add(ring); }
-  function addHeart(){ const s=new THREE.Shape(); s.moveTo(0,0); s.bezierCurveTo(0,3,-3,3,-3,0); s.bezierCurveTo(-3,-3,0,-2,0,-1); s.bezierCurveTo(0,-2,3,-3,3,0); s.bezierCurveTo(3,3,0,3,0,0); const geo=new THREE.ExtrudeGeometry(s,{depth:1.5,bevelEnabled:true,bevelThickness:0.4}); const m=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:0xff6b9a})); m.scale.set(1.5,1.5,1.5); m.position.set(-6,-8,0); m.rotation.x=-0.3; group.add(m); }
-  function addFireworks(){ for(let i=0;i<3;i++){ const pg=new THREE.Group(); for(let j=0;j<60;j++){ const p=new THREE.Mesh(new THREE.SphereGeometry(0.8,6,6), new THREE.MeshStandardMaterial({color: new THREE.Color().setHSL(Math.random(),0.8,0.6)})); p.position.set(THREE.MathUtils.randFloatSpread(40), THREE.MathUtils.randFloat(4,30), THREE.MathUtils.randFloatSpread(40)); pg.add(p);} group.add(pg);} }
+    window.addEventListener("resize", ()=>{
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        camera.aspect = window.innerWidth/window.innerHeight;
+        camera.updateProjectionMatrix();
+    });
+}
 
-  // UI elements
-  const modelSelect = document.getElementById('modelSelect');
-  const colorPicker = document.getElementById('colorPicker');
-  const resetBtn = document.getElementById('resetBtn');
-  const cameraToggle = document.getElementById('cameraToggle');
-  const fullscreen = document.getElementById('fullscreen');
+function createParticles(type){
+    if(particles) scene.remove(particles);
 
-  modelSelect.addEventListener('change', ()=>{
-    const v = modelSelect.value;
-    while(group.children.length) group.remove(group.children[0]);
-    if(v==='moon') addMoon();
-    if(v==='saturn') addSaturn();
-    if(v==='heart') addHeart();
-    if(v==='fireworks') addFireworks();
-  });
+    const count = 1500;
+    const positions = new Float32Array(count * 3);
 
-  colorPicker.addEventListener('input', ()=> { if(particleMat) particleMat.uniforms.uColor.value.set(colorPicker.value); });
-
-  resetBtn.addEventListener('click', ()=> { controls.reset(); camera.position.set(0,0,70); });
-
-  fullscreen.addEventListener('click', ()=> { if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); });
-
-  // touch pinch and tap zoom
-  let lastDist = null;
-  renderer.domElement.addEventListener('touchstart', (e)=> {
-    if(e.touches.length === 2){ lastDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY); }
-  });
-  renderer.domElement.addEventListener('touchmove', (e)=> {
-    if(e.touches.length === 2 && lastDist){
-      const d = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-      const factor = d / lastDist;
-      camera.position.z = THREE.MathUtils.clamp(camera.position.z / factor, controls.minDistance, controls.maxDistance);
-      lastDist = d;
+    for(let i=0;i<count;i++){
+        const p = generateShape(type);
+        positions[i*3] = p.x;
+        positions[i*3+1] = p.y;
+        positions[i*3+2] = p.z;
     }
-  });
-  renderer.domElement.addEventListener('touchend', ()=> { lastDist = null; });
 
-  // double-tap to reset
-  let lastTap = 0;
-  renderer.domElement.addEventListener('pointerup', ()=> {
-    const now = Date.now();
-    if(now - lastTap < 300){ controls.reset(); camera.position.set(0,0,70); }
-    lastTap = now;
-  });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+        "position", new THREE.BufferAttribute(positions,3));
 
-  // MediaPipe hands (optional): open/close -> zoom
-  let hands=null, cam=null, camActive=false;
-  cameraToggle.addEventListener('click', async ()=>{
-    if(camActive){
-      if(cam){ cam.stop(); cam=null; }
-      if(hands){ hands.close(); hands=null; }
-      camActive=false; cameraToggle.textContent='手势: 关'; return;
+    const material = new THREE.PointsMaterial({
+        color:new THREE.Color(color),
+        size:0.25
+    });
+
+    particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+}
+
+function generateShape(type){
+    const p = new THREE.Vector3();
+
+    switch(type){
+        case "Heart3D": {
+            const t = Math.random()*Math.PI*2;
+            const u = (Math.random()-0.5)*2;
+            const r = (2 - Math.abs(u))*(0.8+Math.random()*0.6);
+            p.x = r*Math.cos(t);
+            p.y = 1.3*Math.pow(Math.sin(t),3);
+            p.z = u*1.5;
+        } break;
+
+        case "Flower": {
+            p.setFromSphericalCoords(
+                10+Math.random()*2,
+                Math.random()*Math.PI,
+                Math.random()*Math.PI*2
+            );
+        } break;
+
+        case "Star": {
+            let radius = 7 + Math.random()*3;
+            p.x = (Math.random()-0.5)*radius;
+            p.y = (Math.random()-0.5)*radius;
+            p.z = (Math.random()-0.5)*radius;
+        } break;
+
+        case "Snowflake": {
+            p.set(Math.random()*6-3, Math.random()*6-3, Math.random()*6-3);
+        } break;
+
+        case "OrbitRing": {
+            const angle = Math.random()*Math.PI*2;
+            p.x = Math.cos(angle)*(8+Math.random()*4);
+            p.y = Math.sin(angle)*(8+Math.random()*4);
+            p.z = Math.random()*2 - 1;
+        } break;
     }
-    try{
-      hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-      hands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:0.6,minTrackingConfidence:0.6});
-      hands.onResults(onHands);
-      const video = document.createElement('video'); video.style.display='none'; document.body.appendChild(video);
-      cam = new Camera(video, {onFrame: async ()=> await hands.send({image:video}), width:320, height:240});
-      await cam.start();
-      camActive=true; cameraToggle.textContent='手势: 开';
-    }catch(err){
-      alert('无法启用摄像头手势：' + err.message);
-    }
-  });
 
-  let lastWidth = null;
-  function onHands(results){
-    if(!results.multiHandLandmarks || results.multiHandLandmarks.length===0) return;
-    const lm = results.multiHandLandmarks[0];
-    const ix = lm[8].x, iy = lm[8].y, px = lm[20].x, py = lm[20].y;
-    const spread = Math.hypot(ix-px, iy-py);
-    if(lastWidth !== null){
-      const diff = spread - lastWidth;
-      camera.position.z = THREE.MathUtils.clamp(camera.position.z - diff * 180, controls.minDistance, controls.maxDistance);
-    }
-    lastWidth = spread;
-  }
+    return p;
+}
 
-  // animate
-  const clock = new THREE.Clock();
-  function animate(){
+function animate(){
     requestAnimationFrame(animate);
-    const t = clock.getElapsedTime();
-    if(particleMat) particleMat.uniforms.uTime.value = t;
-    if(particleSystem) particleSystem.rotation.y += 0.0006;
-    group.rotation.y += 0.0005;
-    controls.update();
-    renderer.render(scene, camera);
-  }
-  animate();
 
-  // resize
-  window.addEventListener('resize', ()=> {
-    camera.aspect = window.innerWidth/window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  });
-  </script>
+    const pos = particles.geometry.attributes.position;
+
+    for(let i=0;i<pos.count;i++){
+        const x = pos.getX(i);
+        const y = pos.getY(i);
+        const z = pos.getZ(i);
+
+        const dir = new THREE.Vector3(x,y,z).normalize();
+
+        if(attract){
+            pos.setXYZ(i, x - dir.x*0.03, y - dir.y*0.03, z - dir.z*0.03);
+        } else {
+            pos.setXYZ(i, x + dir.x*0.03, y + dir.y*0.03, z + dir.z*0.03);
+        }
+    }
+
+    pos.needsUpdate = true;
+    particles.rotation.y += 0.002;
+    renderer.render(scene, camera);
+}
+</script>
+
 </body>
 </html>
