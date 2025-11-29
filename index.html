@@ -1,193 +1,392 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="zh">
 <head>
-<title>Interactive 3D Particle System</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-    body {
-        margin:0; overflow:hidden;
-        background:black; 
-        font-family:Arial, sans-serif;
+  <meta charset="utf-8" />
+  <title>Interactive 3D Particle System - Heart3D / Flower / Snow / Solar</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body { width:100%;height:100%;margin:0;padding:0;background:#050505;color:#fff;font-family:Inter,Segoe UI,Arial; }
+    #canvas-container { position:fixed; inset:0; z-index:1; }
+    #video-input { position: absolute; top:10px; left:10px; width:160px; height:120px; z-index:5; transform: scaleX(-1); border-radius:8px; border:1px solid rgba(255,255,255,0.06); opacity:0.6; }
+    #loading { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:10; color:#bbb; font-size:14px; background:rgba(0,0,0,0.4); padding:12px 18px; border-radius:8px; }
+    .instruction { position: absolute; bottom:24px; left:24px; z-index:6; background:rgba(10,10,10,0.6); padding:12px; border-radius:10px; font-size:13px; color:#ddd; }
+    .instruction b { color:#fff; }
+    .gui-inline { position: fixed; top: 18px; right: 18px; z-index:6; }
+  </style>
+
+  <!-- module shim for importmap support (for older browsers) -->
+  <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+
+  <!-- import map: three + examples -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.150.1/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.150.1/examples/jsm/"
     }
-    #ui {
-        position:fixed;
-        top:20px; right:20px;
-        background:rgba(255,255,255,0.12);
-        backdrop-filter: blur(10px);
-        padding:12px;
-        border-radius:10px;
-        display:flex;
-        flex-direction:column;
-        gap:10px;
-    }
-    select, input, button {
-        padding:8px;
-        border:none;
-        border-radius:6px;
-        font-size:14px;
-    }
-    button {
-        cursor:pointer;
-        background:#222;
-        color:white;
-    }
-</style>
+  }
+  </script>
+
+  <!-- MediaPipe runtime helpers -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin></script>
 </head>
 <body>
+  <div id="loading">Loading 3D engine & AI hand model...</div>
+  <video id="video-input" autoplay playsinline muted></video>
+  <div id="canvas-container"></div>
 
-<div id="ui">
-    <select id="shapeSelect">
-        <option value="Heart3D">Heart</option>
-        <option value="Flower">Flower</option>
-        <option value="Star">Star</option>
-        <option value="Snowflake">Snowflake</option>
-        <option value="OrbitRing">Solar Orbit</option>
-    </select>
+  <div class="instruction">
+    <div style="font-size:15px;margin-bottom:6px;">🖐 Interaction Guide</div>
+    <div>• <b>Open hand</b> → Particles expand / explode</div>
+    <div>• <b>Closed hand (pinch/fist)</b> → Particles contract</div>
+    <div style="margin-top:6px;color:#aaa;font-size:12px;">UI on top-right: model, color, size</div>
+  </div>
 
-    <input type="color" id="colorPicker" value="#ff3388">
-    <button id="gestureToggle">Gesture: OFF</button>
-</div>
+  <div id="gui" class="gui-inline"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r155/three.min.js"></script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-<script>
-let scene, camera, renderer, particles;
-let attract = true;
-let color = "#ff3388";
-let shape = "Heart3D";
+    // ===== Config =====
+    const PARTICLE_COUNT = 20000; // reduce to 12000 if performance issues
+    const DEFAULT_COLOR = '#ff3388';
 
-init();
-animate();
+    // ===== Scene / Renderer =====
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050505, 0.02);
 
-function init(){
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 1.2, 6);
 
-    camera = new THREE.PerspectiveCamera(
-        65, window.innerWidth/window.innerHeight,0.1,1000);
-    camera.position.set(0,0,35);
-
-    renderer = new THREE.WebGLRenderer({antialias:true});
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
 
-    createParticles(shape);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.45;
 
-    document.getElementById("shapeSelect").addEventListener("change", e=>{
-        shape = e.target.value;
-        createParticles(shape);
-    });
+    window.addEventListener('resize', onWindowResize);
 
-    document.getElementById("colorPicker").addEventListener("input", e=>{
-        color = e.target.value;
-        particles.material.color.set(color);
-    });
+    // ===== Particles =====
+    let geometry = null;
+    let material = null;
+    let particleSystem = null;
+    let targetPositions = new Float32Array(PARTICLE_COUNT * 3);
 
-    document.getElementById("gestureToggle").addEventListener("click", e=>{
-        attract = !attract;
-        e.target.textContent = attract ? "Gesture: ON" : "Gesture: OFF";
-    });
+    const params = {
+      model: 'Heart3D',
+      color: DEFAULT_COLOR,
+      size: 0.045,
+      speed: 0.06
+    };
 
-    window.addEventListener("resize", ()=>{
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        camera.aspect = window.innerWidth/window.innerHeight;
-        camera.updateProjectionMatrix();
-    });
-}
+    initParticles('Heart3D');
 
-function createParticles(type){
-    if(particles) scene.remove(particles);
+    function initParticles(shapeName){
+      // remove old
+      if(particleSystem){ scene.remove(particleSystem); geometry.dispose(); material.dispose(); }
 
-    const count = 1500;
-    const positions = new Float32Array(count * 3);
+      geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(PARTICLE_COUNT * 3);
+      // initial random scatter
+      for(let i=0;i<PARTICLE_COUNT*3;i++){ positions[i] = (Math.random()-0.5) * 15; }
 
-    for(let i=0;i<count;i++){
-        const p = generateShape(type);
-        positions[i*3] = p.x;
-        positions[i*3+1] = p.y;
-        positions[i*3+2] = p.z;
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+      const sprite = new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/spark1.png', ()=>{}, undefined, ()=>{ /* ignore load errors */ });
+
+      material = new THREE.PointsMaterial({
+        size: params.size,
+        map: sprite,
+        transparent:true,
+        opacity:0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        sizeAttenuation: true,
+        color: new THREE.Color(params.color)
+      });
+
+      particleSystem = new THREE.Points(geometry, material);
+      scene.add(particleSystem);
+
+      calculateTarget(shapeName);
     }
 
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-        "position", new THREE.BufferAttribute(positions,3));
+    // ===== Shape generators (fill targetPositions) =====
+    function calculateTarget(shape){
+      // helper setter
+      function setPos(i,x,y,z){ targetPositions[i*3] = x; targetPositions[i*3+1] = y; targetPositions[i*3+2] = z; }
 
-    const material = new THREE.PointsMaterial({
-        color:new THREE.Color(color),
-        size:0.25
-    });
+      if(shape === 'Heart3D'){
+        // rejection sampling for a 3D heart-like volume (true 3D, not 2D)
+        let i = 0;
+        while(i < PARTICLE_COUNT){
+          const x = (Math.random()-0.5) * 3.2;
+          const y = (Math.random()-0.5) * 3.2;
+          const z = (Math.random()-0.5) * 3.2;
 
-    particles = new THREE.Points(geometry, material);
-    scene.add(particles);
-}
-
-function generateShape(type){
-    const p = new THREE.Vector3();
-
-    switch(type){
-        case "Heart3D": {
-            const t = Math.random()*Math.PI*2;
-            const u = (Math.random()-0.5)*2;
-            const r = (2 - Math.abs(u))*(0.8+Math.random()*0.6);
-            p.x = r*Math.cos(t);
-            p.y = 1.3*Math.pow(Math.sin(t),3);
-            p.z = u*1.5;
-        } break;
-
-        case "Flower": {
-            p.setFromSphericalCoords(
-                10+Math.random()*2,
-                Math.random()*Math.PI,
-                Math.random()*Math.PI*2
-            );
-        } break;
-
-        case "Star": {
-            let radius = 7 + Math.random()*3;
-            p.x = (Math.random()-0.5)*radius;
-            p.y = (Math.random()-0.5)*radius;
-            p.z = (Math.random()-0.5)*radius;
-        } break;
-
-        case "Snowflake": {
-            p.set(Math.random()*6-3, Math.random()*6-3, Math.random()*6-3);
-        } break;
-
-        case "OrbitRing": {
-            const angle = Math.random()*Math.PI*2;
-            p.x = Math.cos(angle)*(8+Math.random()*4);
-            p.y = Math.sin(angle)*(8+Math.random()*4);
-            p.z = Math.random()*2 - 1;
-        } break;
-    }
-
-    return p;
-}
-
-function animate(){
-    requestAnimationFrame(animate);
-
-    const pos = particles.geometry.attributes.position;
-
-    for(let i=0;i<pos.count;i++){
-        const x = pos.getX(i);
-        const y = pos.getY(i);
-        const z = pos.getZ(i);
-
-        const dir = new THREE.Vector3(x,y,z).normalize();
-
-        if(attract){
-            pos.setXYZ(i, x - dir.x*0.03, y - dir.y*0.03, z - dir.z*0.03);
-        } else {
-            pos.setXYZ(i, x + dir.x*0.03, y + dir.y*0.03, z + dir.z*0.03);
+          // scale tweak for a heart implicit function
+          const X = x*1.0, Y = y*1.05, Z = z*1.0;
+          const a = X*X + (9/4)*Y*Y + Z*Z - 1;
+          // implicit heart-like inequality (modified)
+          if (a*a*a - X*X*Z*Z*Z - (9/80)*Y*Y*Z*Z*Z < 0){
+            setPos(i, x*1.6, y*1.6 + 0.3, z*1.4);
+            i++;
+          }
         }
+      }
+      else if(shape === 'FlowerPetalCluster'){
+        // more petals: multiple layers, petalNum = 12
+        const petalNum = 12;
+        const coreCount = Math.floor(PARTICLE_COUNT * 0.12);
+        let idx = 0;
+        // core (dense)
+        for(let i=0;i<coreCount;i++){
+          const r = Math.random()*0.45;
+          const theta = Math.random()*Math.PI*2;
+          const phi = Math.acos(2*Math.random()-1);
+          setPos(idx++, r*Math.sin(phi)*Math.cos(theta), r*Math.cos(phi)-0.2, r*Math.sin(phi)*Math.sin(theta));
+        }
+        // petals
+        const petalParticles = PARTICLE_COUNT - coreCount;
+        for(let i=0;i<petalParticles;i++){
+          const t = i / petalParticles;
+          const theta = i * 2.399963; // golden-ish spiral
+          const radius = Math.sqrt(t) * 2.3; // growth
+          const wave = Math.sin(theta * petalNum) * (0.35 + 0.15 * Math.random()); // more pronounced
+          const baseX = radius * Math.cos(theta);
+          const baseY = Math.sin(theta) * 0.6 - 0.8;
+          const baseZ = radius * Math.sin(theta);
+          // give petal thickness and curvature
+          const px = baseX * (1 + 0.08*Math.sin(theta*3)) + wave * 0.6;
+          const py = baseY + (1 - Math.exp(-radius*0.6)) * 0.9 * Math.cos(theta*0.5);
+          const pz = baseZ * (1 + 0.06*Math.cos(theta*2));
+          setPos(idx++, px, py, pz);
+        }
+      }
+      else if(shape === 'Snowflake'){
+        // crystal-like six-branch fractal-ish
+        const branchCount = 6;
+        const perBranch = Math.floor(PARTICLE_COUNT / branchCount);
+        let idx=0;
+        for(let b=0;b<branchCount;b++){
+          const baseAngle = (b/branchCount) * Math.PI*2;
+          for(let p=0;p<perBranch;p++){
+            const dist = Math.random() * 4;
+            let x = dist;
+            let y = (Math.random()-0.5) * 0.06;
+            // add side branches occasionally
+            if(Math.random() > 0.6){
+              const branchAng = Math.PI/3 * (Math.random()>0.5?1:-1);
+              const branchLen = 0.25 * (4 - dist)/4;
+              x += Math.cos(branchAng) * branchLen;
+              y += Math.sin(branchAng) * branchLen;
+            }
+            const finalX = x * Math.cos(baseAngle) - y * Math.sin(baseAngle);
+            const finalY = x * Math.sin(baseAngle) + y * Math.cos(baseAngle);
+            setPos(idx++, finalX, finalY, (Math.random()-0.5)*0.08);
+          }
+        }
+        // fill leftover with small jitter around center
+        for(let j = idx; j < PARTICLE_COUNT; j++) setPos(j, (Math.random()-0.5)*0.2, (Math.random()-0.5)*0.2, (Math.random()-0.5)*0.2);
+      }
+      else if(shape === 'SolarOrbit'){
+        // sun + orbit rings + planets (stylized)
+        let idx=0;
+        const sunCount = Math.floor(PARTICLE_COUNT * 0.12);
+        for(let s=0;s<sunCount;s++){
+          const r = Math.random()*0.8;
+          const th = Math.random()*Math.PI*2;
+          const ph = Math.acos(2*Math.random()-1);
+          setPos(idx++, r*Math.sin(ph)*Math.cos(th), r*Math.cos(ph), r*Math.sin(ph)*Math.sin(th));
+        }
+        const radii = [1.2,1.8,2.6,3.6,5.0,6.8,8.7,10.0];
+        for(let p=0;p<8;p++){
+          const ringCount = Math.floor((PARTICLE_COUNT - sunCount) / (8*2));
+          const r = radii[p];
+          for(let k=0;k<ringCount;k++){
+            const ang = Math.random()*Math.PI*2;
+            const rv = r + (Math.random()-0.5)*0.08;
+            setPos(idx++, rv*Math.cos(ang), (Math.random()-0.5)*0.03, rv*Math.sin(ang));
+          }
+          // planet cluster near orbit
+          const planetParticles = Math.floor(ringCount*1.3);
+          const planetAngle = Math.random()*Math.PI*2;
+          const px = r*Math.cos(planetAngle), pz = r*Math.sin(planetAngle);
+          for(let q=0;q<planetParticles;q++){
+            const pr = Math.random()*0.25;
+            const th = Math.random()*Math.PI*2;
+            setPos(idx++, px + pr*Math.cos(th), (Math.random()-0.5)*0.18, pz + pr*Math.sin(th));
+          }
+        }
+        for(let j=idx;j<PARTICLE_COUNT;j++) setPos(j, (Math.random()-0.5)*0.6, (Math.random()-0.5)*0.6, (Math.random()-0.5)*0.6);
+      }
+      else if(shape === 'Fireworks'){
+        let idx=0;
+        const trailCount = 120;
+        const particlesPerTrail = Math.floor(PARTICLE_COUNT / trailCount);
+        for(let t=0;t<trailCount;t++){
+          const theta = Math.random()*Math.PI*2;
+          const phi = Math.acos(2*Math.random()-1);
+          const dx = Math.sin(phi)*Math.cos(theta);
+          const dy = Math.sin(phi)*Math.sin(theta);
+          const dz = Math.cos(phi);
+          const maxLen = 3 + Math.random()*3;
+          for(let p=0;p<particlesPerTrail;p++){
+            const prog = p/particlesPerTrail;
+            const dist = prog*maxLen;
+            const scatter = 0.15*prog;
+            setPos(idx++, dx*dist + (Math.random()-0.5)*scatter, dy*dist + (prog*prog*-1.5) + (Math.random()-0.5)*scatter, dz*dist + (Math.random()-0.5)*scatter);
+          }
+        }
+        for(let j=idx;j<PARTICLE_COUNT;j++) setPos(j, (Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2);
+      }
+
+      // write into material (copy to geometry if first time)
+      // targetPositions is global Float32Array
+      // (already filled by setPos)
     }
 
-    pos.needsUpdate = true;
-    particles.rotation.y += 0.002;
-    renderer.render(scene, camera);
-}
-</script>
+    // ===== GUI =====
+    const gui = new GUI({container: document.getElementById('gui')});
+    gui.title('Control Panel');
 
+    const shapeOptions = {
+      'Heart3D': 'Heart3D',
+      'FlowerPetalCluster': 'FlowerPetalCluster',
+      'Snowflake': 'Snowflake',
+      'SolarOrbit': 'SolarOrbit',
+      'Fireworks': 'Fireworks'
+    };
+
+    gui.add(params, 'model', shapeOptions).name('Select Model').onChange(v=>{
+      initParticles(v);
+    });
+    gui.addColor(params, 'color').name('Particle Color').onChange(v=>{
+      if(material) material.color.set(v);
+    });
+    gui.add(params, 'size', 0.01, 0.2).name('Particle Size').onChange(v=>{
+      if(material) material.size = v;
+    });
+    gui.add(params, 'speed', 0.01, 0.2).name('Lerp Speed');
+
+    // ===== MediaPipe Hands (single hand detection) =====
+    const videoElement = document.getElementById('video-input');
+    let gestureState = 'neutral'; // 'open' | 'closed' | 'neutral'
+    let handInfluence = 0;
+
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.55,
+      minTrackingConfidence: 0.55
+    });
+
+    hands.onResults(results => {
+      if(results.multiHandLandmarks && results.multiHandLandmarks.length > 0){
+        const lm = results.multiHandLandmarks[0];
+        // distance between thumb tip (4) and index tip (8) as simple pinch/open metric
+        const d = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+        // thresholds tuned empirically
+        gestureState = d < 0.045 ? 'closed' : (d > 0.14 ? 'open' : 'neutral');
+      } else {
+        gestureState = 'neutral';
+      }
+    });
+
+    const cameraUtils = new Camera(videoElement, {
+      onFrame: async () => { await hands.send({image: videoElement}); },
+      width: 320, height: 240
+    });
+
+    cameraUtils.start().then(()=> {
+      document.getElementById('loading').style.display = 'none';
+    }).catch(err => {
+      console.warn('Camera start failed:', err);
+      document.getElementById('loading').textContent = 'Camera permission denied or unavailable — gestures disabled';
+      setTimeout(()=>document.getElementById('loading').style.display = 'none', 1800);
+    });
+
+    // ===== Animation loop =====
+    const clock = new THREE.Clock();
+
+    function animate(){
+      requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+
+      // update influence smoothly
+      let targetInf = 0;
+      if(gestureState === 'open') targetInf = 1.0;
+      else if(gestureState === 'closed') targetInf = -0.85;
+      else targetInf = 0;
+
+      handInfluence += (targetInf - handInfluence) * 0.08;
+
+      // ensure targetPositions filled for current model (call calculateTarget if not)
+      // compute dest positions from targetPositions with scaling + small noise
+      const posAttr = geometry.attributes.position;
+      const posArray = posAttr.array;
+
+      for(let i=0;i<PARTICLE_COUNT;i++){
+        const ix = i*3, iy = ix+1, iz = ix+2;
+
+        const tx = targetPositions[ix] || 0;
+        const ty = targetPositions[iy] || 0;
+        const tz = targetPositions[iz] || 0;
+
+        // scale effect from handInfluence
+        let scale = 1 + handInfluence * 0.9;
+        if(scale < 0.05) scale = 0.05;
+
+        // soft noise so it feels organic
+        const noiseSpeed = 0.6;
+        const noiseAmp = 0.03;
+        const nx = Math.sin(t * noiseSpeed + ty * 3.1) * noiseAmp;
+        const ny = Math.cos(t * noiseSpeed + tx * 2.7) * noiseAmp;
+        const nz = Math.sin(t * noiseSpeed + tz * 1.9) * noiseAmp;
+
+        const destX = tx * scale + nx;
+        const destY = ty * scale + ny;
+        const destZ = tz * scale + nz;
+
+        posArray[ix] += (destX - posArray[ix]) * params.speed;
+        posArray[iy] += (destY - posArray[iy]) * params.speed;
+        posArray[iz] += (destZ - posArray[iz]) * params.speed;
+      }
+
+      geometry.attributes.position.needsUpdate = true;
+
+      // rotation subtle
+      if(gestureState === 'neutral') particleSystem.rotation.y += 0.0008;
+      else particleSystem.rotation.y += (gestureState === 'open' ? 0.004 : -0.002);
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    // ===== helpers =====
+    function onWindowResize(){
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // initial call to fill and start
+    // calculateTarget was called from initParticles
+    animate();
+
+  </script>
 </body>
 </html>
